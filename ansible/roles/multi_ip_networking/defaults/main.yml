@@ -1,0 +1,5 @@
+---
+network_interface: "eth0"
+gateway_ip: "10.0.1.1"
+rt_tables_file: "/etc/iproute2/rt_tables"
+systemd_service_path: "/etc/systemd/system/multi-ip-routing.service"

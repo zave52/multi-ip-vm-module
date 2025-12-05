@@ -1,0 +1,50 @@
+---
+plugin: azure.azcollection.azure_rm
+
+exclude_host_filters:
+  - powerstate != 'running'
+
+conditional_groups:
+  multi_ip_vms: "tags.purpose == 'multi-ip-vm'"
+  test_environment: "tags.environment == 'test'"
+
+keyed_groups:
+  - key: tags.environment
+    prefix: env
+    separator: '_'
+  - key: tags.purpose
+    prefix: purpose
+    separator: '_'
+  - key: location
+    prefix: location
+    separator: '_'
+  - key: resource_group
+    prefix: rg
+    separator: '_'
+
+default_host_filters:
+  - public_ipv4_addresses
+
+compose:
+  ansible_host: public_ipv4_addresses[0]
+  ansible_user: "azureuser"
+  ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+  ansible_python_interpreter: "/usr/bin/python3"
+  vm_name: name
+  vm_resource_group: resource_group
+  vm_location: location
+  vm_tags: tags
+  network_interfaces: networkProfile.networkInterfaces
+
+hostvar_expressions:
+  ip_mappings: >-
+    dict()
+
+use_contrib_script_compatible_sanitization: true
+plain_host_names: true
+
+cache: true
+cache_plugin: jsonfile
+cache_timeout: 3600
+cache_connection: /tmp/ansible_azure_cache
+cache_prefix: azure_rm

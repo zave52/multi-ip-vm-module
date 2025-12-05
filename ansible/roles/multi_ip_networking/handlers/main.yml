@@ -1,0 +1,7 @@
+---
+- name: restart multi-ip-routing service
+  systemd:
+    name: multi-ip-routing
+    state: restarted
+    daemon_reload: yes
+  become: yes

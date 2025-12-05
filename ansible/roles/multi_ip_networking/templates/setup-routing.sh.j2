@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+INTERFACE="{{ network_interface }}"
+GATEWAY="{{ gateway_ip }}"
+
+echo "Setting up multi-IP routing configuration..."
+
+{% for ip_map in ip_mappings %}
+{% if not ip_map.is_primary | default(false) %}
+TABLE_NAME="rt_table_{{ ip_map.private_ip | replace('.', '_') }}"
+
+if ! ip addr show ${INTERFACE} | grep -q "{{ ip_map.private_ip }}/"; then
+    echo "Adding IP alias: {{ ip_map.private_ip }}"
+    ip addr add {{ ip_map.private_ip }}/24 dev ${INTERFACE}
+fi
+
+if ! ip route show table ${TABLE_NAME} | grep -q "default via"; then
+    echo "Adding default route to ${TABLE_NAME} for {{ ip_map.private_ip }}"
+    ip route add default via ${GATEWAY} dev ${INTERFACE} table ${TABLE_NAME}
+fi
+
+if ! ip rule show | grep -q "from {{ ip_map.private_ip }} lookup ${TABLE_NAME}"; then
+    echo "Adding IP rule for {{ ip_map.private_ip }}"
+    ip rule add from {{ ip_map.private_ip }} table ${TABLE_NAME}
+fi
+{% endif %}
+{% endfor %}
+
+echo "Multi-IP routing configuration completed successfully"

@@ -1,0 +1,14 @@
+[Unit]
+Description=Multi-IP Policy-Based Routing Configuration
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/setup-multi-ip-routing.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
