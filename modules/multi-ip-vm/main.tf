@@ -75,3 +75,71 @@ resource "azurerm_public_ip" "secondary" {
     index   = count.index + 1
   })
 }
+
+resource "azurerm_network_interface" "main" {
+  name                = "${var.name}-nic"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+
+  ip_configuration {
+    name                          = "ipconfig-primary"
+    subnet_id                     = azurerm_subnet.main.id
+    private_ip_address_allocation = "Static"
+    private_ip_address            = local.private_ips[0]
+    public_ip_address_id          = azurerm_public_ip.primary.id
+    primary                       = true
+  }
+
+  dynamic "ip_configuration" {
+    for_each = range(var.secondary_ip_count)
+    content {
+      name                          = "ipconfig-secondary-${ip_configuration.value + 1}"
+      subnet_id                     = azurerm_subnet.main.id
+      private_ip_address_allocation = "Static"
+      private_ip_address            = local.private_ips[ip_configuration.value + 1]
+      public_ip_address_id          = azurerm_public_ip.secondary[ip_configuration.value].id
+      primary                       = false
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "azurerm_network_interface_security_group_association" "main" {
+  network_interface_id      = azurerm_network_interface.main.id
+  network_security_group_id = azurerm_network_security_group.main.id
+}
+
+resource "azurerm_linux_virtual_machine" "main" {
+  name                = "${var.name}-vm"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  size                = var.vm_size
+  admin_username      = var.admin_username
+
+  network_interface_ids = [
+    azurerm_network_interface.main.id,
+  ]
+
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.ssh_public_key
+  }
+
+  os_disk {
+    name                 = "${var.name}-osdisk"
+    caching              = "ReadWrite"
+    storage_account_type = var.os_disk_storage_type
+  }
+
+  source_image_reference {
+    publisher = var.vm_image_publisher
+    offer     = var.vm_image_offer
+    sku       = var.vm_image_sku
+    version   = var.vm_image_version
+  }
+
+  disable_password_authentication = true
+
+  tags = var.tags
+}

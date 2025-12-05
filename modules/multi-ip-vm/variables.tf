@@ -99,3 +99,49 @@ variable "public_ip_sku" {
     error_message = "Public IP SKU must be either 'Basic' or 'Standard'."
   }
 }
+
+variable "admin_username" {
+  description = "Admin username for the VM"
+  type        = string
+}
+
+variable "ssh_public_key" {
+  description = "SSH public key"
+  type        = string
+  sensitive   = true
+}
+
+variable "vm_size" {
+  description = "Size of the VM"
+  type        = string
+}
+
+variable "vm_image_publisher" {
+  description = "Publisher of the VM image"
+  type        = string
+  default     = "Canonical"
+}
+
+variable "vm_image_offer" {
+  description = "Offer of the VM image"
+  type        = string
+  default     = "0001-com-ubuntu-server-jammy"
+}
+
+variable "vm_image_sku" {
+  description = "SKU of the VM image"
+  type        = string
+  default     = "22_04-lts-gen2"
+}
+
+variable "vm_image_version" {
+  description = "Version of the VM image"
+  type        = string
+  default     = "latest"
+}
+
+variable "os_disk_storage_type" {
+  description = "Storage account type for OS disk"
+  type        = string
+  default     = "Premium_LRS"
+}
