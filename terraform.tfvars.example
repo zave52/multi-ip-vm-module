@@ -1,0 +1,26 @@
+resource_group_name = "rg-multi-ip-test"
+location            = "eastus"
+
+name = "multi-ip"
+
+secondary_ip_count = 5
+
+vnet_address_space    = "10.0.0.0/16"
+subnet_address_prefix = "10.0.1.0/24"
+private_ip_start      = "10.0.1.100"
+
+admin_username = "azureuser"
+vm_size        = "Standard_D2s_v5"
+
+vm_image_publisher   = "Canonical"
+vm_image_offer       = "0001-com-ubuntu-server-jammy"
+vm_image_sku         = "22_04-lts-gen2"
+vm_image_version     = "latest"
+os_disk_storage_type = "Premium_LRS"
+
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC... your-email@example.com"
+
+tags = {
+  environment = "test"
+  purpose     = "multi-ip-vm"
+}
