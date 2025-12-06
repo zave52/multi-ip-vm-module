@@ -5,88 +5,96 @@
   gather_facts: no
 
   tasks:
-    - name: Get Azure VMs with multi-ip-vm tag
-      azure.azcollection.azure_rm_virtualmachine_info:
-        tags:
-          - purpose:multi-ip-vm
-      register: azure_vms
+    - name: Discover Azure VMs
+      block:
+        - name: Get Azure VMs with multi-ip-vm tag
+          azure.azcollection.azure_rm_virtualmachine_info:
+            tags:
+              - purpose:multi-ip-vm
+          register: azure_vms
 
-    - name: Show discovered VMs
-      debug:
-        msg: "Found {{ azure_vms.vms | length }} VM(s) with multi-ip-vm tag"
+        - name: Show discovered VMs
+          debug:
+            msg: "Found {{ azure_vms.vms | length }} VM(s) with multi-ip-vm tag"
 
-    - name: Fail if no VMs found
-      fail:
-        msg: "No VMs found with tag 'purpose:multi-ip-vm'"
-      when: azure_vms.vms | length == 0
+        - name: Fail if no VMs found
+          fail:
+            msg: "No VMs found with tag 'purpose:multi-ip-vm'"
+          when: azure_vms.vms | length == 0
 
-    - name: Extract resource group and NIC name for each VM
-      set_fact:
-        vm_nic_map: "{{ vm_nic_map | default([]) + [{'vm_name': item.name, 'resource_group': item.resource_group, 'nic_id': item.network_interface_names[0]}] }}"
-      loop: "{{ azure_vms.vms }}"
-      loop_control:
-        label: "{{ item.name }}"
+    - name: Gather Network Interface Information
+      block:
+        - name: Extract resource group and NIC name for each VM
+          set_fact:
+            vm_nic_map: "{{ vm_nic_map | default([]) + [{'vm_name': item.name, 'resource_group': item.resource_group, 'nic_id': item.network_interface_names[0]}] }}"
+          loop: "{{ azure_vms.vms }}"
+          loop_control:
+            label: "{{ item.name }}"
 
-    - name: Get network interface details for each VM
-      azure.azcollection.azure_rm_networkinterface_info:
-        resource_group: "{{ item.resource_group }}"
-        name: "{{ item.nic_id.split('/')[-1] }}"
-      register: nic_info
-      loop: "{{ vm_nic_map }}"
-      loop_control:
-        label: "{{ item.vm_name }}"
+        - name: Get network interface details for each VM
+          azure.azcollection.azure_rm_networkinterface_info:
+            resource_group: "{{ item.resource_group }}"
+            name: "{{ item.nic_id.split('/')[-1] }}"
+          register: nic_info
+          loop: "{{ vm_nic_map }}"
+          loop_control:
+            label: "{{ item.vm_name }}"
 
-    - name: Get all public IP addresses in resource group
-      azure.azcollection.azure_rm_publicipaddress_info:
-        resource_group: "{{ azure_vms.vms[0].resource_group }}"
-      register: public_ips
+        - name: Get all public IP addresses in resource group
+          azure.azcollection.azure_rm_publicipaddress_info:
+            resource_group: "{{ azure_vms.vms[0].resource_group }}"
+          register: public_ips
 
-    - name: Build complete IP mappings for each VM
-      set_fact:
-        vm_configs: "{{ vm_configs | default([]) + [item | combine({'public_ips': public_ips})] }}"
-      loop: "{{ nic_info.results }}"
-      loop_control:
-        label: "{{ item.item.vm_name }}"
+    - name: Build IP Configuration Mappings
+      block:
+        - name: Build complete IP mappings for each VM
+          set_fact:
+            vm_configs: "{{ vm_configs | default([]) + [item | combine({'public_ips': public_ips})] }}"
+          loop: "{{ nic_info.results }}"
+          loop_control:
+            label: "{{ item.item.vm_name }}"
 
-    - name: Build IP mappings list for each VM
-      set_fact:
-        vm_ip_mappings: >-
-          {% set mappings = [] %}
-          {% for ip_config in item.networkinterfaces[0].ip_configurations %}
-            {% set pub_ip_resource_id = ip_config.public_ip_address | default('') %}
-            {% set pub_ip_name = pub_ip_resource_id.split('/')[-1] if pub_ip_resource_id else '' %}
-            {% set matching_pips = item.public_ips.publicipaddresses | selectattr('name', 'equalto', pub_ip_name) | list %}
-            {% set pub_ip_addr = matching_pips[0].ip_address if matching_pips | length > 0 else '' %}
-            {% set _ = mappings.append({'private_ip': ip_config.private_ip_address, 'public_ip': pub_ip_addr, 'is_primary': ip_config.primary}) %}
-          {% endfor %}
-          {{ mappings | to_json }}
-      loop: "{{ vm_configs }}"
-      loop_control:
-        label: "{{ item.item.vm_name }}"
-      register: ip_mappings_results
+        - name: Build IP mappings list for each VM
+          set_fact:
+            vm_ip_mappings: >-
+              {% set mappings = [] %}
+              {% for ip_config in item.networkinterfaces[0].ip_configurations %}
+                {% set pub_ip_resource_id = ip_config.public_ip_address | default('') %}
+                {% set pub_ip_name = pub_ip_resource_id.split('/')[-1] if pub_ip_resource_id else '' %}
+                {% set matching_pips = item.public_ips.publicipaddresses | selectattr('name', 'equalto', pub_ip_name) | list %}
+                {% set pub_ip_addr = matching_pips[0].ip_address if matching_pips | length > 0 else '' %}
+                {% set _ = mappings.append({'private_ip': ip_config.private_ip_address, 'public_ip': pub_ip_addr, 'is_primary': ip_config.primary}) %}
+              {% endfor %}
+              {{ mappings | to_json }}
+          loop: "{{ vm_configs }}"
+          loop_control:
+            label: "{{ item.item.vm_name }}"
+          register: ip_mappings_results
 
-    - name: Process and add VMs to inventory with IP mappings
-      add_host:
-        name: "{{ (item.item.public_ips.publicipaddresses | selectattr('name', 'search', 'primary') | map(attribute='ip_address') | list)[0] }}"
-        groups: multi_ip_vms
-        vm_name: "{{ item.item.item.vm_name }}"
-        resource_group: "{{ item.item.item.resource_group }}"
-        ip_mappings: "{{ item.ansible_facts.vm_ip_mappings | from_json }}"
-        ansible_user: azureuser
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-        ansible_python_interpreter: /usr/bin/python3
-      loop: "{{ ip_mappings_results.results }}"
-      loop_control:
-        label: "{{ item.item.item.vm_name }}"
+    - name: Add VMs to Dynamic Inventory
+      block:
+        - name: Process and add VMs to inventory with IP mappings
+          add_host:
+            name: "{{ (item.item.public_ips.publicipaddresses | selectattr('name', 'search', 'primary') | map(attribute='ip_address') | list)[0] }}"
+            groups: multi_ip_vms
+            vm_name: "{{ item.item.item.vm_name }}"
+            resource_group: "{{ item.item.item.resource_group }}"
+            ip_mappings: "{{ item.ansible_facts.vm_ip_mappings | from_json }}"
+            ansible_user: azureuser
+            ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            ansible_python_interpreter: /usr/bin/python3
+          loop: "{{ ip_mappings_results.results }}"
+          loop_control:
+            label: "{{ item.item.item.vm_name }}"
 
-    - name: Display discovered VMs and their IPs
-      debug:
-        msg: |
-          VMs discovered and added to inventory:
-          {% for host in groups['multi_ip_vms'] %}
-          - {{ hostvars[host].vm_name }} ({{ host }})
-            IPs: {{ hostvars[host].ip_mappings }}
-          {% endfor %}
+        - name: Display discovered VMs and their IPs
+          debug:
+            msg: |
+              VMs discovered and added to inventory:
+              {% for host in groups['multi_ip_vms'] %}
+              - {{ hostvars[host].vm_name }} ({{ host }})
+                IPs: {{ hostvars[host].ip_mappings }}
+              {% endfor %}
 
 - name: Configure Multi-IP Networking with Policy-Based Routing
   hosts: multi_ip_vms
@@ -94,27 +102,29 @@
   gather_facts: yes
 
   pre_tasks:
-    - name: Display target host information
-      debug:
-        msg:
-          - "Configuring host: {{ vm_name }}"
-          - "Resource group: {{ resource_group }}"
-          - "Ansible user: {{ ansible_user }}"
-          - "Number of IPs to configure: {{ ip_mappings | length }}"
+    - name: Pre-Configuration Validation
+      block:
+        - name: Display target host information
+          debug:
+            msg:
+              - "Configuring host: {{ vm_name }}"
+              - "Resource group: {{ resource_group }}"
+              - "Ansible user: {{ ansible_user }}"
+              - "Number of IPs to configure: {{ ip_mappings | length }}"
 
-    - name: Wait for SSH to be available
-      wait_for_connection:
-        timeout: 300
-        delay: 5
+        - name: Wait for SSH to be available
+          wait_for_connection:
+            timeout: 300
+            delay: 5
 
-    - name: Gather network facts
-      setup:
-        gather_subset:
-          - network
+        - name: Gather network facts
+          setup:
+            gather_subset:
+              - network
 
-    - name: Display current network interfaces
-      debug:
-        msg: "{{ ansible_interfaces }}"
+        - name: Display current network interfaces
+          debug:
+            msg: "{{ ansible_facts['interfaces'] }}"
 
   roles:
     - role: multi_ip_networking
@@ -123,67 +133,69 @@
         gateway_ip: "10.0.1.1"
 
   post_tasks:
-    - name: Final verification - show all IP addresses
-      command: ip addr show
-      register: all_ips
-      changed_when: false
+    - name: Verify Network Configuration
+      block:
+        - name: Final verification - show all IP addresses
+          command: ip addr show
+          register: all_ips
+          changed_when: false
 
-    - name: Display all IP addresses
-      debug:
-        var: all_ips.stdout_lines
+        - name: Display all IP addresses
+          debug:
+            var: all_ips.stdout_lines
 
-    - name: Final verification - show all routing rules
-      command: ip rule show
-      register: all_rules
-      changed_when: false
+        - name: Final verification - show all routing rules
+          command: ip rule show
+          register: all_rules
+          changed_when: false
 
-    - name: Display all routing rules
-      debug:
-        var: all_rules.stdout_lines
+        - name: Display all routing rules
+          debug:
+            var: all_rules.stdout_lines
 
-    - name: Check if systemd service is enabled
-      systemd:
-        name: multi-ip-routing
-      register: service_status
+    - name: Run Custom Verification Script
+      block:
+        - name: Create IP mappings file on remote VM
+          copy:
+            content: "{{ ip_mappings | to_json }}"
+            dest: /tmp/ip_mappings.json
+            mode: '0644'
 
-    - name: Display service status
-      debug:
-        msg:
-          - "Service enabled: {{ service_status.status.LoadState }}"
-          - "Service active: {{ service_status.status.ActiveState }}"
+        - name: Copy verification script to remote VM
+          copy:
+            src: "../{{ verification_script_path }}"
+            dest: "/tmp/verification.sh"
+            mode: '0755'
 
-    - name: Configuration complete message
-      debug:
-        msg: "Multi-IP networking configuration complete"
+        - name: Install jq
+          apt:
+            name: jq
+            state: present
+            update_cache: yes
 
-    - name: Create IP mappings file on remote VM
-      copy:
-        content: "{{ ip_mappings | to_json }}"
-        dest: /tmp/ip_mappings.json
-        mode: '0644'
+        - name: Execute verification script on remote VM
+          command: /tmp/verification.sh
+          register: verification_result
+          changed_when: false
+
+        - name: Display verification script results
+          debug:
+            var: verification_result.stdout_lines
       when: verification_script_path is defined and verification_script_path | length > 0
 
-    - name: Copy verification script to remote VM
-      copy:
-        src: "../{{ verification_script_path }}"
-        dest: "/tmp/verification.sh"
-        mode: '0755'
-      when: verification_script_path is defined and verification_script_path | length > 0
+    - name: Verify Service Status
+      block:
+        - name: Check if systemd service is enabled
+          systemd:
+            name: multi-ip-routing
+          register: service_status
 
-    - name: Install jq
-      apt:
-        name: jq
-        state: present
-        update_cache: yes
-      when: verification_script_path is defined and verification_script_path | length > 0
+        - name: Display service status
+          debug:
+            msg:
+              - "Service enabled: {{ service_status.status.LoadState }}"
+              - "Service active: {{ service_status.status.ActiveState }}"
 
-    - name: Execute verification script on remote VM
-      command: /tmp/verification.sh
-      register: verification_result
-      changed_when: false
-      when: verification_script_path is defined and verification_script_path | length > 0
-
-    - name: Display verification script results
-      debug:
-        var: verification_result.stdout_lines
-      when: verification_script_path is defined and verification_script_path | length > 0
+        - name: Configuration complete message
+          debug:
+            msg: "Multi-IP networking configuration complete"
