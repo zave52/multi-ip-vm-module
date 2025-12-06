@@ -1,112 +1,124 @@
 ---
-- name: Display IP mappings to be configured
-  debug:
-    msg: "Configuring {{ ip_mappings | length }} IP addresses on {{ network_interface }}"
+- name: Initial Configuration and Validation
+  block:
+    - name: Display IP mappings to be configured
+      debug:
+        msg: "Configuring {{ ip_mappings | length }} IP addresses on {{ network_interface }}"
 
-- name: Ensure iproute2 is installed
-  package:
-    name: iproute2
-    state: present
-    update_cache: yes
-  become: yes
+    - name: Ensure iproute2 is installed
+      package:
+        name: iproute2
+        state: present
+        update_cache: yes
+      become: yes
 
-- name: Get current IP addresses on interface
-  command: ip addr show {{ network_interface }}
-  register: ip_addr_output
-  changed_when: false
+    - name: Get current IP addresses on interface
+      command: ip addr show {{ network_interface }}
+      register: ip_addr_output
+      changed_when: false
 
-- name: Display current IP configuration
-  debug:
-    var: ip_addr_output.stdout_lines
+    - name: Display current IP configuration
+      debug:
+        var: ip_addr_output.stdout_lines
 
-- name: Configure IP aliases on the network interface
-  command: ip addr add {{ item.private_ip }}/24 dev {{ network_interface }}
-  loop: "{{ ip_mappings }}"
-  when:
-    - not item.is_primary | default(false)
-    - item.private_ip not in ip_addr_output.stdout
-  become: yes
-  register: ip_alias_result
-  failed_when:
-    - ip_alias_result.rc != 0
-    - "'File exists' not in ip_alias_result.stderr"
+- name: Configure IP Aliases
+  block:
+    - name: Configure IP aliases on the network interface
+      command: ip addr add {{ item.private_ip }}/24 dev {{ network_interface }}
+      loop: "{{ ip_mappings }}"
+      when:
+        - not item.is_primary | default(false)
+        - item.private_ip not in ip_addr_output.stdout
+      become: yes
+      register: ip_alias_result
+      failed_when:
+        - ip_alias_result.rc != 0
+        - "'File exists' not in ip_alias_result.stderr"
 
-- name: Backup existing rt_tables file
-  copy:
-    src: "{{ rt_tables_file }}"
-    dest: "{{ rt_tables_file }}.backup"
-    remote_src: yes
-    force: no
-  become: yes
+- name: Setup Routing Tables
+  block:
+    - name: Backup existing rt_tables file
+      copy:
+        src: "{{ rt_tables_file }}"
+        dest: "{{ rt_tables_file }}.backup"
+        remote_src: yes
+        force: no
+      become: yes
 
-- name: Add custom routing tables to rt_tables
-  lineinfile:
-    path: "{{ rt_tables_file }}"
-    line: "{{ 100 + idx }} rt_table_{{ item.private_ip | replace('.', '_') }}"
-    regexp: "^{{ 100 + idx }}\\s+"
-    state: present
-  loop: "{{ ip_mappings }}"
-  loop_control:
-    index_var: idx
-  when: not item.is_primary | default(false)
-  become: yes
+    - name: Add custom routing tables to rt_tables
+      lineinfile:
+        path: "{{ rt_tables_file }}"
+        line: "{{ 100 + idx }} rt_table_{{ item.private_ip | replace('.', '_') }}"
+        regexp: "^{{ 100 + idx }}\\s+"
+        state: present
+      loop: "{{ ip_mappings }}"
+      loop_control:
+        index_var: idx
+      when: not item.is_primary | default(false)
+      become: yes
 
-- name: Create routing configuration script
-  template:
-    src: setup-routing.sh.j2
-    dest: /usr/local/bin/setup-multi-ip-routing.sh
-    mode: '0755'
-  become: yes
-  notify: restart multi-ip-routing service
+- name: Deploy Routing Configuration
+  block:
+    - name: Create routing configuration script
+      template:
+        src: setup-routing.sh.j2
+        dest: /usr/local/bin/setup-multi-ip-routing.sh
+        mode: '0755'
+      become: yes
+      notify: restart multi-ip-routing service
 
-- name: Apply routing configuration
-  command: /usr/local/bin/setup-multi-ip-routing.sh
-  become: yes
-  changed_when: false
+    - name: Apply routing configuration
+      command: /usr/local/bin/setup-multi-ip-routing.sh
+      become: yes
+      changed_when: false
 
-- name: Create systemd service for persistent routing
-  template:
-    src: multi-ip-routing.service.j2
-    dest: "{{ systemd_service_path }}"
-    mode: '0644'
-  become: yes
-  notify: restart multi-ip-routing service
+- name: Configure Systemd Service
+  block:
+    - name: Create systemd service for persistent routing
+      template:
+        src: multi-ip-routing.service.j2
+        dest: "{{ systemd_service_path }}"
+        mode: '0644'
+      become: yes
+      notify: restart multi-ip-routing service
 
-- name: Enable multi-ip-routing service
-  systemd:
-    name: multi-ip-routing
-    enabled: yes
-    daemon_reload: yes
-  become: yes
+    - name: Enable multi-ip-routing service
+      systemd:
+        name: multi-ip-routing
+        enabled: yes
+        daemon_reload: yes
+      become: yes
 
-- name: Verify IP addresses are configured
-  command: ip addr show {{ network_interface }}
-  register: final_ip_config
-  changed_when: false
+- name: Verify Configuration
+  block:
+    - name: Verify IP addresses are configured
+      command: ip addr show {{ network_interface }}
+      register: final_ip_config
+      changed_when: false
 
-- name: Display final IP configuration
-  debug:
-    var: final_ip_config.stdout_lines
+    - name: Display final IP configuration
+      debug:
+        var: final_ip_config.stdout_lines
 
-- name: Verify IP rules are configured
-  command: ip rule show
-  register: ip_rules
-  changed_when: false
+    - name: Verify IP rules are configured
+      command: ip rule show
+      register: ip_rules
+      changed_when: false
 
-- name: Display IP rules
-  debug:
-    var: ip_rules.stdout_lines
+    - name: Display IP rules
+      debug:
+        var: ip_rules.stdout_lines
 
-- name: Verify routing tables
-  command: ip route show table rt_table_{{ item.private_ip | replace('.', '_') }}
-  loop: "{{ ip_mappings }}"
-  when: not item.is_primary | default(false)
-  register: routing_tables
-  changed_when: false
-  become: yes
+    - name: Verify routing tables
+      command: ip route show table rt_table_{{ item.private_ip | replace('.', '_') }}
+      loop: "{{ ip_mappings }}"
+      when: not item.is_primary | default(false)
+      register: routing_tables
+      changed_when: false
+      become: yes
 
-- name: Display routing tables
-  debug:
-    msg: "Table for {{ item.item.private_ip }}: {{ item.stdout }}"
-  loop: "{{ routing_tables.results }}"
-  when: not item.skipped | default(false)
+    - name: Display routing tables
+      debug:
+        msg: "Table for {{ item.item.private_ip }}: {{ item.stdout }}"
+      loop: "{{ routing_tables.results }}"
+      when: not item.skipped | default(false)

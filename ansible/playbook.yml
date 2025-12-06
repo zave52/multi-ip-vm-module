@@ -11,7 +11,7 @@
           - purpose:multi-ip-vm
       register: azure_vms
 
-    - name: Debug - Show discovered VMs
+    - name: Show discovered VMs
       debug:
         msg: "Found {{ azure_vms.vms | length }} VM(s) with multi-ip-vm tag"
 
@@ -50,13 +50,14 @@
 
     - name: Build IP mappings list for each VM
       set_fact:
-        temp_ip_mappings: >-
+        vm_ip_mappings: >-
           {% set mappings = [] %}
           {% for ip_config in item.networkinterfaces[0].ip_configurations %}
-            {% set pub_ip_id = ip_config.public_ip_address_id | default('') %}
-            {% set pub_ip_name = pub_ip_id.split('/')[-1] if pub_ip_id else '' %}
-            {% set pub_ip = (item.public_ips.publicipaddresses | selectattr('name', 'equalto', pub_ip_name) | map(attribute='ip_address') | list)[0] | default('') %}
-            {% set _ = mappings.append({'private_ip': ip_config.private_ip_address, 'public_ip': pub_ip}) %}
+            {% set pub_ip_resource_id = ip_config.public_ip_address | default('') %}
+            {% set pub_ip_name = pub_ip_resource_id.split('/')[-1] if pub_ip_resource_id else '' %}
+            {% set matching_pips = item.public_ips.publicipaddresses | selectattr('name', 'equalto', pub_ip_name) | list %}
+            {% set pub_ip_addr = matching_pips[0].ip_address if matching_pips | length > 0 else '' %}
+            {% set _ = mappings.append({'private_ip': ip_config.private_ip_address, 'public_ip': pub_ip_addr, 'is_primary': ip_config.primary}) %}
           {% endfor %}
           {{ mappings | to_json }}
       loop: "{{ vm_configs }}"
@@ -70,7 +71,7 @@
         groups: multi_ip_vms
         vm_name: "{{ item.item.item.vm_name }}"
         resource_group: "{{ item.item.item.resource_group }}"
-        ip_mappings: "{{ item.ansible_facts.temp_ip_mappings | from_json }}"
+        ip_mappings: "{{ item.ansible_facts.vm_ip_mappings | from_json }}"
         ansible_user: azureuser
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
         ansible_python_interpreter: /usr/bin/python3
@@ -155,11 +156,25 @@
       debug:
         msg: "Multi-IP networking configuration complete"
 
+    - name: Create IP mappings file on remote VM
+      copy:
+        content: "{{ ip_mappings | to_json }}"
+        dest: /tmp/ip_mappings.json
+        mode: '0644'
+      when: verification_script_path is defined and verification_script_path | length > 0
+
     - name: Copy verification script to remote VM
       copy:
         src: "../{{ verification_script_path }}"
         dest: "/tmp/verification.sh"
         mode: '0755'
+      when: verification_script_path is defined and verification_script_path | length > 0
+
+    - name: Install jq
+      apt:
+        name: jq
+        state: present
+        update_cache: yes
       when: verification_script_path is defined and verification_script_path | length > 0
 
     - name: Execute verification script on remote VM
